@@ -1,0 +1,223 @@
+#!/usr/bin/env python
+
+# This program attempts to make an HTML file suitable for offline use.
+# Its name is, according to Google Translate, derived from the Welsh word for
+# "disconnected".
+
+cache_dir = ".html-offline-cache"
+
+import sys
+import mimetypes
+import hashlib
+import urllib2
+
+def get_file(url, mime_type, reason):
+  local_name = download_if_needed(url, mime_type, reason)
+  to_from(reason, local_name, None)
+  return open(local_name, 'r').read()
+
+def to_from(reason, to, fr):
+  if not to: to = '[...]'
+  if not fr: fr = '[...]'
+  if cache_dir in to: to = '(cache)'
+  if cache_dir in fr: fr = '(cache)'
+  print >>sys.stderr, "[%-20s] %30s --> %s" % (reason, to, fr)
+
+def mkdir_if_needed(d):
+  if not os.path.exists(d):
+    os.makedirs(d)
+
+def download_if_needed(url, mime_type, reason):
+# Make sure that a local or cached copy of the requested URL is available, and
+# return its path.  If mime_type is None, guess.
+
+  # If it's a local file, we don't need to do anything.
+  if not re.search('^http(s)?:', url):
+    return url
+
+  # If it's a URL, download it to our cache.
+  mkdir_if_needed(cache_dir)
+  if mime_type:
+    # MIME type was given.  Use the second part as the file extension.
+    extension = '.' + mime_type.split('/')[1]
+  else:
+    # No MIME type given.  Can we guess?
+    mime_type  = mimetypes.guess_type(url)[0]
+
+    if mime_type:
+      # Yes.  Use the second part as the file extension.
+      extension = '.' + mime_type.split('/')[1]
+    else:
+      # No.  Is there an extension on the filename?
+      match = re.match(r'\.(.*)$', url)
+      if match:
+        # Yes.  Use it.
+        extension = '.' + match.group(1)
+      else:
+        # No.  Give up.
+        extension = ''
+
+  cached_name = os.path.join(cache_dir, hashlib.sha224(url).hexdigest()[:8] + extension)
+
+  if not os.path.isfile(cached_name):
+    to_from(reason, url, cached_name)
+    try:
+      request = urllib2.Request(url)
+      request.add_header('User-Agent', 'Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11')
+      opener = urllib2.build_opener()  
+      f = opener.open(request)
+    except Exception as e:
+      raise Exception("Failed to open URL '%s': %s" % (url, e))
+    x = f.read()
+    f = open(cached_name, 'w')
+    print >>f, x,
+    f.close()
+  return cached_name
+
+import argparse
+from lxml import etree
+import re
+import os
+import shutil
+
+def massage_url(url, mime_type, reason):
+# Return a URL to use in place of the given one.  Download the file to a local
+# directory and return a relative link to that.
+  global files_dir
+  cached_name = download_if_needed(url, mime_type, reason)
+  local_name = os.path.join(files_dir, os.path.basename(cached_name))
+  mkdir_if_needed(os.path.dirname(local_name))
+  if local_name not in local_files_used:
+    to_from(reason, cached_name, local_name)
+    shutil.copy2(cached_name, local_name)
+    local_files_used[local_name] = True
+  return local_name
+
+
+def expand_file(filename):
+# Perform offline expansion of the given file: Read it, modify it, and write it
+# back.
+
+  # Read the file.
+  to_from('offline', filename, None)
+  text = open(filename, 'r').read()
+  
+  # Make the needed changes.
+  new_text = expand_text(filename, text)
+
+  # If anything has changed, write it back out.
+  if new_text != text:
+    to_from('offline', None, filename)
+    print >>open(filename, 'w'), new_text
+
+def expand_text(filename, text):
+# Modify the given text and return the result.  (The filename is needed to
+# process relative links correctly.  That file is not read nor written.)
+  current_dir = os.path.split(filename)[0] + '/'
+  if re.search(r'html$', filename, re.I):
+    new_text = expand_html(text, current_dir)
+  elif re.search(r'css$', filename, re.I):
+    new_text = expand_css(text, current_dir)
+  else:
+    print "Don't know how to expand %s.  Ignoring." % filename
+    new_text = text
+  return new_text
+
+
+
+def expand_html(text, current_dir):
+# Perform offline expansion of the given HTML text.  Recursively expand any
+# dependencies we find, and return the modified document.
+  tree = etree.HTML(text)
+
+  # Traverse the parse tree looking for things to expand.
+  for element in tree.iter():
+    # Anything with a src attribute: Download the source.
+    if 'src' in element.attrib:
+      url = element.get('src')
+      url = massage_url(url, None, element.tag + ' src')
+      element.attrib['src'] = url
+
+    # Style: Download external styles.
+    if element.tag == 'link' and 'href' in element.attrib:
+      element.attrib['href'] = massage_url(element.get('href'), None, 'link href')
+    
+    # Style: Process any embedded styles.
+    if element.tag == 'style':
+      element.text = expand_css(element.text, current_dir)
+
+  # Done.
+  return etree.tostring(tree, doctype="", method="html")
+
+def expand_css(text, current_dir):
+# Expand a CSS style sheet.
+
+  # Download any @imports.
+  def match_css_import(match):
+    url = massage_url(match.group(1), 'text/css', 'css import')
+    expand_file(url)
+    url = re.sub('^' + current_dir, '', url)
+    return "@import '%s';" % url
+  text = re.sub(
+    "@import '([^']*)';",
+    match_css_import,
+    text
+  )
+
+  # Download and url(...)s.
+  def match_css_url(match):
+    url = massage_url(match.group(1), None, 'css url')
+    url = re.sub('^' + current_dir, '', url)
+    return "url(%s)" % url
+
+  text = re.sub(
+    r"url\((http[^\)]*)\)",
+    match_css_url,
+    text
+  )
+  
+  return text
+
+
+def init(_files_dir):
+  global local_files_used, files_dir
+  local_files_used = dict()
+  files_dir = _files_dir
+  mkdir_if_needed(files_dir)
+
+def done():
+  global files_dir
+  for fn in os.listdir(files_dir):
+    fn = os.path.join(files_dir, fn)
+    if fn not in local_files_used:
+      to_from('extra offline file', fn, '(removed)')
+      os.remove(fn)
+
+
+def main():
+  # Set up command-line options.
+  arg_parser = argparse.ArgumentParser()
+  arg_parser.add_argument(dest='input_filename', help='input filename')
+  args = arg_parser.parse_args()
+
+  # Make sure we have reasonable filenames.
+  args.job_name = re.sub('\.html$', '', args.input_filename)
+
+  # We'll want an empty directory for all of the files that go with the HTML.
+  files_dir = args.job_name + "-files"
+  if not os.path.exists(files_dir):
+    os.makedirs(files_dir)
+  else:
+    for f in os.listdir(files_dir):
+      x = os.path.join(files_dir, f)
+      to_from('clean offline files', x, '(removed)')
+      os.unlink(x)
+  
+  init(files_dir)
+  expand_file(args.input_filename)
+
+  # All done!
+  pass
+
+if __name__ == '__main__':
+  main()
