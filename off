@@ -11,11 +11,6 @@ import mimetypes
 import hashlib
 import urllib2
 
-def get_file(url, mime_type, reason):
-  local_name = download_if_needed(url, mime_type, reason)
-  to_from(reason, local_name, None)
-  return open(local_name, 'r').read()
-
 def to_from(reason, to, fr):
   if not to: to = '[...]'
   if not fr: fr = '[...]'
@@ -56,6 +51,9 @@ def download_if_needed(url, mime_type, reason):
       else:
         # No.  Give up.
         extension = ''
+
+  if extension == ".svg+xml":
+    extension = ".svg"
 
   cached_name = os.path.join(cache_dir, hashlib.sha224(url).hexdigest()[:8] + extension)
 
@@ -164,7 +162,7 @@ def expand_css(text, current_dir):
     text
   )
 
-  # Download and url(...)s.
+  # Download any url(...)s.
   def match_css_url(match):
     url = massage_url(match.group(1), None, 'css url')
     url = re.sub('^' + current_dir, '', url)
