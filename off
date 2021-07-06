@@ -1,22 +1,20 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # This program attempts to make an HTML file suitable for offline use.
-# Its name is, according to Google Translate, derived from the Welsh word for
-# "disconnected".
 
 cache_dir = ".html-offline-cache"
 
 import sys
 import mimetypes
 import hashlib
-import urllib2
+import urllib.request, urllib.error, urllib.parse
 
 def to_from(reason, to, fr):
   if not to: to = '[...]'
   if not fr: fr = '[...]'
   if cache_dir in to: to = '(cache)'
   if cache_dir in fr: fr = '(cache)'
-  print >>sys.stderr, "[%-20s] %30s --> %s" % (reason, to, fr)
+  print("[%-20s] %30s --> %s" % (reason, to, fr), file=sys.stderr)
 
 def mkdir_if_needed(d):
   if not os.path.exists(d):
@@ -55,20 +53,20 @@ def download_if_needed(url, mime_type, reason):
   if extension == ".svg+xml":
     extension = ".svg"
 
-  cached_name = os.path.join(cache_dir, hashlib.sha224(url).hexdigest()[:8] + extension)
+  cached_name = os.path.join(cache_dir, hashlib.sha224(url.encode('utf-8')).hexdigest()[:8] + extension)
 
   if not os.path.isfile(cached_name):
     to_from(reason, url, cached_name)
     try:
-      request = urllib2.Request(url)
+      request = urllib.request.Request(url)
       request.add_header('User-Agent', 'Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11')
-      opener = urllib2.build_opener()  
-      f = opener.open(request)
+      context = ssl._create_unverified_context()
+      f = urlopen(request, context=context)
     except Exception as e:
       raise Exception("Failed to open URL '%s': %s" % (url, e))
     x = f.read()
-    f = open(cached_name, 'w')
-    print >>f, x,
+    f = open(cached_name, 'wb')
+    f.write(x)
     f.close()
   return cached_name
 
@@ -106,7 +104,12 @@ def expand_file(filename):
   # If anything has changed, write it back out.
   if new_text != text:
     to_from('offline', None, filename)
-    print >>open(filename, 'w'), new_text
+    if isinstance(new_text, str):
+      print(new_text, file=open(filename, 'w'))
+    elif isinstance(new_text, bytes):
+      open(filename, 'wb').write(new_text)
+    else:
+      raise Exception("Don't know what to do with a " + str(type(new_text)))
 
 def expand_text(filename, text):
 # Modify the given text and return the result.  (The filename is needed to
@@ -117,7 +120,7 @@ def expand_text(filename, text):
   elif re.search(r'css$', filename, re.I):
     new_text = expand_css(text, current_dir)
   else:
-    print "Don't know how to expand %s.  Ignoring." % filename
+    print("Don't know how to expand %s.  Ignoring." % filename)
     new_text = text
   return new_text
 
