@@ -174,7 +174,7 @@ def expand_css(text, current_dir):
     return "url(%s)" % url
 
   text = re.sub(
-    r"url\((http[^\)]*)\)",
+    r"url\(((http|file)[^\)]*)\)",
     match_css_url,
     text
   )
