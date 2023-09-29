@@ -138,6 +138,7 @@ def expand_html(text, current_dir):
     # Anything with a src attribute: Download the source.
     if 'src' in element.attrib:
       url = element.get('src')
+      print(url)
       url = massage_url(url, None, element.tag + ' src')
       element.attrib['src'] = url
 
@@ -150,7 +151,7 @@ def expand_html(text, current_dir):
       element.text = expand_css(element.text, current_dir)
 
   # Done.
-  return etree.tostring(tree, doctype="", method="html")
+  return etree.tostring(tree, doctype="<!DOCTYPE html>", method="html")
 
 def expand_css(text, current_dir):
 # Expand a CSS style sheet.
